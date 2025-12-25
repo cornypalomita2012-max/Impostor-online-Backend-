@@ -884,6 +884,19 @@ function processVoteResults(room, code) {
   }
 }
 
+// Endpoint raíz
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Impostor Online - Backend API',
+    status: 'online',
+    rooms: rooms.size,
+    endpoints: {
+      health: '/health',
+      socket: 'Socket.IO en la misma URL'
+    }
+  });
+});
+
 // Endpoint de health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', rooms: rooms.size });
