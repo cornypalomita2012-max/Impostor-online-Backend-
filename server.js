@@ -628,7 +628,8 @@ io.on('connection', (socket) => {
 
       if (callback) callback({ success: true });
 
-      // Esperar 15 segundos antes de continuar
+      // Esperar tiempo configurado antes de continuar
+      const wordDelay = (room.config.wordDelay || 15) * 1000;
       setTimeout(async () => {
         if (room.allWordsSubmitted()) {
           // Iniciar votación
@@ -659,7 +660,7 @@ io.on('connection', (socket) => {
             processBotTurn(room, code);
           }
         }
-      }, 15000);
+      }, wordDelay);
     } else {
       if (callback) callback({ success: false, error: 'No es tu turno' });
     }
@@ -739,7 +740,8 @@ async function processBotTurn(room, code) {
       word: botWord
     });
 
-    // Esperar 15 segundos antes de continuar
+    // Esperar tiempo configurado antes de continuar
+    const wordDelay = (room.config.wordDelay || 15) * 1000;
     setTimeout(async () => {
       if (room.allWordsSubmitted()) {
         room.startVoting();
@@ -766,7 +768,7 @@ async function processBotTurn(room, code) {
           processBotTurn(room, code);
         }
       }
-    }, 15000);
+    }, wordDelay);
   }, thinkTime);
 }
 
@@ -809,6 +811,7 @@ function processVoteResults(room, code) {
     // Reiniciar para desempate con los jugadores empatados
     room.resetForTiebreaker(result.tied);
 
+    const voteDelay = (room.config.voteDelay || 5) * 1000;
     setTimeout(() => {
       const currentPlayer = room.getCurrentPlayer();
 
@@ -832,7 +835,7 @@ function processVoteResults(room, code) {
       if (currentPlayer.isBot) {
         processBotTurn(room, code);
       }
-    }, 5000);
+    }, voteDelay);
   } else {
     // Jugador eliminado
     const eliminatedPlayer = room.getAllPlayers().find(p => p.id === result.eliminated);
@@ -847,6 +850,7 @@ function processVoteResults(room, code) {
     // Verificar condición de victoria
     const winner = room.checkWinCondition();
 
+    const voteDelay = (room.config.voteDelay || 5) * 1000;
     setTimeout(() => {
       if (winner) {
         const allPlayers = room.getAllPlayers().map(p => ({
@@ -880,7 +884,7 @@ function processVoteResults(room, code) {
           processBotTurn(room, code);
         }
       }
-    }, 10000);
+    }, voteDelay);
   }
 }
 
