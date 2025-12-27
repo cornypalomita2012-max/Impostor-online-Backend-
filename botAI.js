@@ -451,6 +451,160 @@ class BotAI {
     // Fallback: votar al más sospechoso
     return topSuspect[0];
   }
+
+  // === MÉTODOS DE IA PARA ROLES ESPECIALES ===
+
+  // Detective: Decidir a quién interrogar
+  shouldInterrogate(allPlayers, interrogatedPlayers) {
+    if (this.role !== 'civil') return null;
+
+    // Filtrar jugadores no interrogados
+    const notInterrogated = allPlayers.filter(p =>
+      p.id !== this.botId &&
+      !interrogatedPlayers.includes(p.id) &&
+      !p.isBot
+    );
+
+    if (notInterrogated.length === 0) return null;
+
+    // Probabilidad del 40% de interrogar en cada turno
+    if (Math.random() < 0.4) {
+      // Priorizar jugadores con mayor sospecha
+      const withScores = notInterrogated.map(p => ({
+        id: p.id,
+        score: this.suspicionScores.get(p.id) || 50
+      }));
+
+      withScores.sort((a, b) => b.score - a.score);
+
+      // 70% interrogar al más sospechoso, 30% al segundo
+      if (Math.random() < 0.7 || withScores.length === 1) {
+        return withScores[0].id;
+      } else {
+        return withScores[1].id;
+      }
+    }
+
+    return null;
+  }
+
+  // Detective: Decidir si añadir sospechoso
+  shouldAddSuspect(playerId) {
+    const suspicion = this.suspicionScores.get(playerId) || 50;
+
+    // Añadir si la sospecha es mayor a 70
+    return suspicion > 70;
+  }
+
+  // Médico: Decidir cuándo usar habilidad
+  shouldUseMedicAbility(voteCounts, allPlayers) {
+    if (this.role !== 'civil') return null;
+
+    // Solo usar si hay votos y alguien tiene 2+ votos
+    if (!voteCounts || voteCounts.size === 0) return null;
+
+    const voteArray = Array.from(voteCounts.entries());
+
+    // Buscar jugadores con más de 1 voto
+    const playersWithMultipleVotes = voteArray.filter(([_, count]) => count >= 2);
+
+    if (playersWithMultipleVotes.length === 0) return null;
+
+    // Ordenar por sospecha (menor = más probable civil)
+    playersWithMultipleVotes.sort((a, b) => {
+      const scoreA = this.suspicionScores.get(a[0]) || 50;
+      const scoreB = this.suspicionScores.get(b[0]) || 50;
+      return scoreA - scoreB;
+    });
+
+    // Si el jugador con más votos parece civil (sospecha < 40), salvarlo
+    const [targetId, voteCount] = playersWithMultipleVotes[0];
+    const suspicion = this.suspicionScores.get(targetId) || 50;
+
+    if (suspicion < 40) {
+      // 80% de probabilidad de salvar si parece civil
+      if (Math.random() < 0.8) {
+        return targetId;
+      }
+    }
+
+    return null;
+  }
+
+  // Escritor: Decidir cuándo y a quién usar habilidad
+  shouldUseWriterAbility(allPlayers) {
+    if (this.role !== 'impostor') return null;
+
+    // 60% de probabilidad de usar la habilidad
+    if (Math.random() < 0.6) {
+      // Filtrar jugadores válidos (no bots, no el mismo bot)
+      const validTargets = allPlayers.filter(p =>
+        p.id !== this.botId &&
+        !p.isBot
+      );
+
+      if (validTargets.length === 0) return null;
+
+      // Ordenar por menor sospecha (atacar a los civiles menos sospechosos)
+      const withScores = validTargets.map(p => ({
+        id: p.id,
+        score: this.suspicionScores.get(p.id) || 50
+      }));
+
+      withScores.sort((a, b) => a.score - b.score);
+
+      // Elegir uno de los 3 menos sospechosos (civiles creíbles)
+      const topTargets = withScores.slice(0, Math.min(3, withScores.length));
+      const target = topTargets[Math.floor(Math.random() * topTargets.length)];
+
+      return {
+        targetId: target.id,
+        fakeWord: this.generateFakeWord()
+      };
+    }
+
+    return null;
+  }
+
+  // Escritor: Generar palabra falsa convincente
+  generateFakeWord() {
+    // Palabras genéricas y vagas que podrían confundir
+    const vagueWords = [
+      'cosa', 'objeto', 'elemento', 'articulo', 'entidad',
+      'concepto', 'idea', 'tema', 'asunto', 'material',
+      'aspecto', 'factor', 'componente', 'parte', 'pieza',
+      'forma', 'tipo', 'clase', 'categoria', 'grupo'
+    ];
+
+    // Si tiene pista, generar palabra relacionada vagamente
+    if (this.pista) {
+      const pistaLower = this.pista.toLowerCase();
+
+      // Intentar crear una palabra que suene relacionada pero vaga
+      const relatedWords = {
+        'animal': ['criatura', 'ser vivo', 'mascota', 'ejemplar'],
+        'comida': ['alimento', 'plato', 'ingrediente', 'producto'],
+        'lugar': ['sitio', 'zona', 'área', 'espacio'],
+        'vehículo': ['transporte', 'medio', 'máquina', 'aparato'],
+        'bebida': ['líquido', 'refresco', 'sustancia', 'mezcla'],
+        'tecnología': ['dispositivo', 'aparato', 'gadget', 'herramienta'],
+        'deporte': ['actividad', 'juego', 'ejercicio', 'competición'],
+        'edificio': ['construcción', 'estructura', 'instalación', 'recinto'],
+        'estación': ['época', 'periodo', 'temporada', 'fase'],
+        'color': ['tonalidad', 'tono', 'matiz', 'pigmento'],
+        'instrumento': ['aparato', 'utensilio', 'herramienta', 'dispositivo']
+      };
+
+      for (const [key, words] of Object.entries(relatedWords)) {
+        if (pistaLower.includes(key)) {
+          return words[Math.floor(Math.random() * words.length)];
+        }
+      }
+    }
+
+    // Palabra vaga aleatoria
+    return vagueWords[Math.floor(Math.random() * vagueWords.length)];
+  }
 }
 
 module.exports = BotAI;
