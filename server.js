@@ -33,7 +33,13 @@ class GameRoom {
     this.config = {
       impostorHasPista: true,
       numImpostors: 1,
-      maxBots: 15
+      maxBots: 15,
+      wordDelay: 15,
+      voteDelay: 5,
+      gameMode: 'classic', // 'classic' o 'roles'
+      numMedics: 0,
+      numDetectives: 0,
+      numWriters: 0
     };
     this.gameState = 'waiting'; // waiting, revealing, playing, voting, finished
     this.currentWord = '';
@@ -45,6 +51,31 @@ class GameRoom {
     this.votes = new Map();
     this.eliminatedPlayers = new Set();
     this.roundNumber = 1;
+    this.usedWords = [];
+    this.allWords = [
+      'Perro', 'Gato', 'Pizza', 'Playa', 'Montaña', 'Coche', 'Avión',
+      'Libro', 'Música', 'Fútbol', 'Ordenador', 'Café', 'Chocolate',
+      'Luna', 'Sol', 'Árbol', 'Flor', 'Río', 'Mar', 'Ciudad',
+      'Casa', 'Escuela', 'Hospital', 'Parque', 'Cine', 'Restaurante',
+      'Invierno', 'Verano', 'Primavera', 'Otoño', 'Lluvia', 'Nieve',
+      'Teléfono', 'Televisión', 'Radio', 'Internet', 'Email', 'Mensaje',
+      'Familia', 'Amigos', 'Trabajo', 'Vacaciones', 'Fiesta', 'Cumpleaños',
+      'Boda', 'Navidad', 'Año Nuevo', 'Halloween', 'Pascua', 'Carnaval',
+      'Música Rock', 'Pop', 'Jazz', 'Clásica', 'Rap', 'Reggaeton',
+      'Guitarra', 'Piano', 'Batería', 'Violín', 'Flauta', 'Trompeta',
+      'Pintura', 'Escultura', 'Fotografía', 'Danza', 'Teatro', 'Cine',
+      'Novela', 'Poesía', 'Cuento', 'Ensayo', 'Biografía', 'Historia',
+      'Matemáticas', 'Física', 'Química', 'Biología', 'Geografía', 'Historia',
+      'Desayuno', 'Almuerzo', 'Cena', 'Merienda', 'Postre', 'Aperitivo',
+      'Pan', 'Arroz', 'Pasta', 'Carne', 'Pescado', 'Verduras',
+      'Frutas', 'Lácteos', 'Huevos', 'Legumbres', 'Cereales', 'Frutos Secos',
+      'Agua', 'Zumo', 'Refresco', 'Cerveza', 'Vino', 'Licor',
+      'Rojo', 'Azul', 'Verde', 'Amarillo', 'Naranja', 'Morado',
+      'Rosa', 'Marrón', 'Negro', 'Blanco', 'Gris', 'Dorado'
+    ];
+    // Sistema de roles (modo roles)
+    this.roleAbilities = new Map(); // {playerId: {detective: {interrogated: []}, medic: {used: false}, writer: {used: false}}}
+    this.wordHistory = []; // Historial de palabras por ronda para detectives
   }
 
   addPlayer(socketId, playerName) {
@@ -146,6 +177,7 @@ class GameRoom {
       } else {
         player.role = 'civil';
       }
+      player.specialRole = null; // Reset special roles
 
       // Los bots se revelan automáticamente
       if (player.isBot) {
@@ -161,55 +193,110 @@ class GameRoom {
       }
     }
 
+    // Asignar roles especiales si el modo es 'roles'
+    if (this.config.gameMode === 'roles') {
+      this.assignSpecialRoles(allPlayers);
+    }
+
     this.gameState = 'revealing';
     return true;
   }
 
+  assignSpecialRoles(allPlayers) {
+    // Separar civiles e impostores
+    const civils = allPlayers.filter(p => p.role === 'civil');
+    const impostors = allPlayers.filter(p => p.role === 'impostor');
+
+    // Asignar Detectives (solo civiles)
+    const shuffledCivils = [...civils].sort(() => Math.random() - 0.5);
+    const numDetectives = Math.min(this.config.numDetectives || 0, civils.length);
+    for (let i = 0; i < numDetectives; i++) {
+      shuffledCivils[i].specialRole = 'detective';
+      this.roleAbilities.set(shuffledCivils[i].id, {
+        type: 'detective',
+        interrogated: [],
+        suspects: [],
+        wordHistory: []
+      });
+    }
+
+    // Asignar Médicos (solo civiles no asignados)
+    const remainingCivils = shuffledCivils.filter(p => !p.specialRole);
+    const numMedics = Math.min(this.config.numMedics || 0, remainingCivils.length);
+    for (let i = 0; i < numMedics; i++) {
+      remainingCivils[i].specialRole = 'medic';
+      this.roleAbilities.set(remainingCivils[i].id, {
+        type: 'medic',
+        abilityUsed: false
+      });
+    }
+
+    // Asignar Escritores (solo impostores)
+    const shuffledImpostors = [...impostors].sort(() => Math.random() - 0.5);
+    const numWriters = Math.min(this.config.numWriters || 0, impostors.length);
+    for (let i = 0; i < numWriters; i++) {
+      shuffledImpostors[i].specialRole = 'writer';
+      this.roleAbilities.set(shuffledImpostors[i].id, {
+        type: 'writer',
+        usedThisRound: false
+      });
+    }
+  }
+
   generateWord() {
-    const words = [
-      'Perro', 'Gato', 'Pizza', 'Playa', 'Montaña', 'Coche', 'Avión',
-      'Libro', 'Música', 'Fútbol', 'Ordenador', 'Café', 'Chocolate',
-      'Luna', 'Sol', 'Árbol', 'Flor', 'Río', 'Mar', 'Ciudad',
-      'Casa', 'Escuela', 'Hospital', 'Parque', 'Cine', 'Restaurante',
-      'Invierno', 'Verano', 'Primavera', 'Otoño', 'Lluvia', 'Nieve'
-    ];
-    return words[Math.floor(Math.random() * words.length)];
+    // Filtrar palabras usadas recientemente en esta sala
+    const availableWords = this.allWords.filter(w => !this.usedWords.includes(w));
+    const wordsToChoose = availableWords.length > 0 ? availableWords : this.allWords;
+
+    const chosenWord = wordsToChoose[Math.floor(Math.random() * wordsToChoose.length)];
+
+    // Añadir a usadas y mantener solo las últimas 2
+    this.usedWords.push(chosenWord);
+    if (this.usedWords.length > 2) {
+      this.usedWords.shift();
+    }
+
+    return chosenWord;
   }
 
   generatePista(word) {
     const pistas = {
-      'Perro': 'Animal doméstico',
-      'Gato': 'Animal doméstico',
-      'Pizza': 'Comida italiana',
-      'Playa': 'Lugar vacacional',
-      'Montaña': 'Lugar natural',
-      'Coche': 'Vehículo',
-      'Avión': 'Vehículo',
-      'Libro': 'Objeto de lectura',
-      'Música': 'Arte sonoro',
-      'Fútbol': 'Deporte',
-      'Ordenador': 'Tecnología',
-      'Café': 'Bebida',
-      'Chocolate': 'Dulce',
-      'Luna': 'Astro',
-      'Sol': 'Astro',
-      'Árbol': 'Planta',
-      'Flor': 'Planta',
-      'Río': 'Agua',
-      'Mar': 'Agua',
-      'Ciudad': 'Lugar urbano',
-      'Casa': 'Edificio',
-      'Escuela': 'Edificio educativo',
-      'Hospital': 'Edificio médico',
-      'Parque': 'Lugar de ocio',
-      'Cine': 'Lugar de entretenimiento',
-      'Restaurante': 'Lugar de comida',
-      'Invierno': 'Estación',
-      'Verano': 'Estación',
-      'Primavera': 'Estación',
-      'Otoño': 'Estación',
-      'Lluvia': 'Clima',
-      'Nieve': 'Blanco'
+      'Perro': 'Animal doméstico', 'Gato': 'Animal doméstico', 'Pizza': 'Comida italiana',
+      'Playa': 'Lugar vacacional', 'Montaña': 'Lugar natural', 'Coche': 'Vehículo',
+      'Avión': 'Vehículo', 'Libro': 'Objeto de lectura', 'Música': 'Arte sonoro',
+      'Fútbol': 'Deporte', 'Ordenador': 'Tecnología', 'Café': 'Bebida',
+      'Chocolate': 'Dulce', 'Luna': 'Astro', 'Sol': 'Astro', 'Árbol': 'Planta',
+      'Flor': 'Planta', 'Río': 'Agua', 'Mar': 'Agua', 'Ciudad': 'Lugar urbano',
+      'Casa': 'Edificio', 'Escuela': 'Edificio educativo', 'Hospital': 'Edificio médico',
+      'Parque': 'Lugar de ocio', 'Cine': 'Entretenimiento', 'Restaurante': 'Lugar de comida',
+      'Invierno': 'Estación fría', 'Verano': 'Estación caliente', 'Primavera': 'Estación florida',
+      'Otoño': 'Estación de hojas', 'Lluvia': 'Clima húmedo', 'Nieve': 'Clima frío',
+      'Teléfono': 'Comunicación', 'Televisión': 'Entretenimiento', 'Radio': 'Audio',
+      'Internet': 'Red global', 'Email': 'Mensaje digital', 'Mensaje': 'Comunicación',
+      'Familia': 'Parentesco', 'Amigos': 'Relación social', 'Trabajo': 'Empleo',
+      'Vacaciones': 'Descanso', 'Fiesta': 'Celebración', 'Cumpleaños': 'Aniversario',
+      'Boda': 'Ceremonia', 'Navidad': 'Festividad', 'Año Nuevo': 'Inicio',
+      'Halloween': 'Festividad', 'Pascua': 'Festividad', 'Carnaval': 'Festividad',
+      'Música Rock': 'Género musical', 'Pop': 'Género musical', 'Jazz': 'Género musical',
+      'Clásica': 'Género musical', 'Rap': 'Género musical', 'Reggaeton': 'Género musical',
+      'Guitarra': 'Instrumento', 'Piano': 'Instrumento', 'Batería': 'Instrumento',
+      'Violín': 'Instrumento', 'Flauta': 'Instrumento', 'Trompeta': 'Instrumento',
+      'Pintura': 'Arte visual', 'Escultura': 'Arte 3D', 'Fotografía': 'Arte visual',
+      'Danza': 'Arte corporal', 'Teatro': 'Arte escénico', 'Novela': 'Literatura',
+      'Poesía': 'Literatura', 'Cuento': 'Literatura', 'Ensayo': 'Texto',
+      'Biografía': 'Historia personal', 'Historia': 'Pasado', 'Matemáticas': 'Ciencia',
+      'Física': 'Ciencia', 'Química': 'Ciencia', 'Biología': 'Ciencia de vida',
+      'Geografía': 'Ciencia de lugares', 'Desayuno': 'Comida', 'Almuerzo': 'Comida',
+      'Cena': 'Comida', 'Merienda': 'Snack', 'Postre': 'Dulce', 'Aperitivo': 'Entrante',
+      'Pan': 'Alimento básico', 'Arroz': 'Cereal', 'Pasta': 'Carbohidrato',
+      'Carne': 'Proteína', 'Pescado': 'Proteína marina', 'Verduras': 'Vegetal',
+      'Frutas': 'Dulce natural', 'Lácteos': 'Derivado leche', 'Huevos': 'Proteína',
+      'Legumbres': 'Vegetal', 'Cereales': 'Grano', 'Frutos Secos': 'Snack',
+      'Agua': 'Líquido vital', 'Zumo': 'Bebida frutal', 'Refresco': 'Bebida gaseosa',
+      'Cerveza': 'Bebida alcohólica', 'Vino': 'Bebida alcohólica', 'Licor': 'Bebida fuerte',
+      'Rojo': 'Color', 'Azul': 'Color', 'Verde': 'Color', 'Amarillo': 'Color',
+      'Naranja': 'Color', 'Morado': 'Color', 'Rosa': 'Color', 'Marrón': 'Color',
+      'Negro': 'Color oscuro', 'Blanco': 'Color claro', 'Gris': 'Color neutro', 'Dorado': 'Color brillante'
     };
     return pistas[word] || 'Sin pista';
   }
@@ -251,6 +338,15 @@ class GameRoom {
 
     this.playerWords.set(playerId, word);
 
+    // Agregar al historial de palabras para detectives
+    const playerName = this.getAllPlayers().find(p => p.id === playerId)?.name || 'Unknown';
+    this.wordHistory.push({
+      round: this.roundNumber,
+      playerId,
+      playerName,
+      word
+    });
+
     // Notificar a los bots sobre la nueva palabra
     this.bots.forEach(bot => {
       if (!this.eliminatedPlayers.has(bot.id)) {
@@ -260,6 +356,139 @@ class GameRoom {
 
     this.currentPlayerIndex++;
     return true;
+  }
+
+  // Métodos para habilidades de roles
+  interrogatePlayer(detectiveId, targetId) {
+    const detective = this.getAllPlayers().find(p => p.id === detectiveId);
+    const target = this.getAllPlayers().find(p => p.id === targetId);
+
+    if (!detective || !target || detective.specialRole !== 'detective') {
+      return { success: false, error: 'Detective inválido' };
+    }
+
+    const abilities = this.roleAbilities.get(detectiveId);
+    if (!abilities || abilities.interrogated.includes(targetId)) {
+      return { success: false, error: 'Ya interrogaste a este jugador' };
+    }
+
+    // Calcular precisión (25-70%)
+    const accuracy = 25 + Math.floor(Math.random() * 46);
+    const isAccurate = Math.random() * 100 < accuracy;
+
+    // Determinar resultado
+    let result;
+    if (isAccurate) {
+      result = target.role; // Respuesta correcta
+    } else {
+      result = target.role === 'civil' ? 'impostor' : 'civil'; // Respuesta incorrecta
+    }
+
+    // Registrar interrogación
+    abilities.interrogated.push(targetId);
+
+    return {
+      success: true,
+      targetName: target.name,
+      result,
+      accuracy,
+      actualRole: target.role // Para verificación (no se muestra al jugador)
+    };
+  }
+
+  removeVote(medicId, targetId) {
+    const medic = this.getAllPlayers().find(p => p.id === medicId);
+
+    if (!medic || medic.specialRole !== 'medic') {
+      return { success: false, error: 'Médico inválido' };
+    }
+
+    const abilities = this.roleAbilities.get(medicId);
+    if (!abilities || abilities.abilityUsed) {
+      return { success: false, error: 'Ya usaste tu habilidad' };
+    }
+
+    // Contar votos actuales
+    const voteCounts = this.countVotes();
+    const currentVotes = voteCounts.get(targetId) || 0;
+
+    if (currentVotes === 0) {
+      return { success: false, error: 'Este jugador no tiene votos' };
+    }
+
+    // Encontrar un votante y eliminar su voto
+    for (const [voterId, votedId] of this.votes.entries()) {
+      if (votedId === targetId) {
+        this.votes.delete(voterId);
+        break;
+      }
+    }
+
+    abilities.abilityUsed = true;
+
+    const targetName = this.getAllPlayers().find(p => p.id === targetId)?.name || 'Unknown';
+    return { success: true, targetName };
+  }
+
+  useWriterAbility(writerId, targetId, fakeWord) {
+    const writer = this.getAllPlayers().find(p => p.id === writerId);
+    const target = this.getAllPlayers().find(p => p.id === targetId);
+
+    if (!writer || writer.specialRole !== 'writer') {
+      return { success: false, error: 'Escritor inválido' };
+    }
+
+    if (!target || targetId === writerId) {
+      return { success: false, error: 'Objetivo inválido' };
+    }
+
+    const abilities = this.roleAbilities.get(writerId);
+    if (!abilities || abilities.usedThisRound) {
+      return { success: false, error: 'Ya usaste tu habilidad esta ronda' };
+    }
+
+    // 50% de probabilidad de éxito
+    const success = Math.random() < 0.5;
+
+    abilities.usedThisRound = true;
+
+    if (success && fakeWord) {
+      // Cambiar la palabra del jugador objetivo
+      const oldWord = target.role === 'civil' ? this.currentWord : null;
+
+      // Guardar la palabra falsa para este jugador
+      target.swappedWord = fakeWord;
+
+      return {
+        success: true,
+        swapped: true,
+        targetName: target.name,
+        targetId: target.id
+      };
+    }
+
+    return {
+      success: true,
+      swapped: false,
+      targetName: target.name
+    };
+  }
+
+  getWordForPlayer(playerId) {
+    const player = this.getAllPlayers().find(p => p.id === playerId);
+    if (!player) return null;
+
+    // Si el escritor cambió su palabra
+    if (player.swappedWord) {
+      return player.swappedWord;
+    }
+
+    // Palabra normal según rol
+    if (player.role === 'civil') {
+      return this.currentWord;
+    } else {
+      return null; // Impostor no tiene palabra
+    }
   }
 
   async getBotWord(bot) {
@@ -372,6 +601,18 @@ class GameRoom {
     this.currentPlayerIndex = 0;
     this.playerWords.clear();
     this.votes.clear();
+
+    // Resetear habilidad del escritor para nueva ronda
+    this.roleAbilities.forEach((ability, playerId) => {
+      if (ability.type === 'writer') {
+        ability.usedThisRound = false;
+      }
+    });
+
+    // Limpiar palabras cambiadas
+    this.getAllPlayers().forEach(p => {
+      delete p.swappedWord;
+    });
   }
 
   resetForTiebreaker(tiedPlayerIds) {
@@ -556,10 +797,14 @@ io.on('connection', (socket) => {
     if (room.startGame()) {
       // Enviar información de revelación a cada jugador
       room.players.forEach((player, playerId) => {
+        const wordToSend = room.getWordForPlayer(playerId);
         io.to(playerId).emit('gameStarted', {
           role: player.role,
-          word: player.role === 'civil' ? room.currentWord : null,
-          pista: player.role === 'impostor' && room.config.impostorHasPista ? room.impostorPista : null
+          specialRole: player.specialRole || null,
+          word: wordToSend,
+          pista: player.role === 'impostor' && room.config.impostorHasPista ? room.impostorPista : null,
+          wordHistory: room.wordHistory,
+          roleAbilities: room.roleAbilities.get(playerId) || null
         });
       });
 
@@ -682,6 +927,11 @@ io.on('connection', (socket) => {
 
       io.to(code).emit('voteProgress', { voted: votedCount, total: alivePlayers.length });
 
+      // Enviar conteo de votos actualizado
+      const voteCounts = room.countVotes();
+      const voteCountsObj = Object.fromEntries(voteCounts);
+      io.to(code).emit('voteCountsUpdated', voteCountsObj);
+
       if (callback) callback({ success: true });
 
       // Si todos votaron, procesar resultados
@@ -690,6 +940,101 @@ io.on('connection', (socket) => {
       }
     } else {
       if (callback) callback({ success: false, error: 'Error al votar' });
+    }
+  });
+
+  // Habilidades de roles
+
+  // Detective: Interrogar jugador
+  socket.on('interrogatePlayer', ({ code, targetId }, callback) => {
+    const room = rooms.get(code);
+
+    if (!room) {
+      if (callback) callback({ success: false, error: 'Sala no encontrada' });
+      return;
+    }
+
+    const result = room.interrogatePlayer(socket.id, targetId);
+
+    if (result.success) {
+      // Enviar resultado al detective
+      if (callback) callback(result);
+
+      // Notificar a todos que el detective interrogó (sin revelar resultado)
+      const detective = room.getAllPlayers().find(p => p.id === socket.id);
+      io.to(code).emit('roleNotification', {
+        type: 'detective',
+        message: `🔍 ${detective?.name || 'Detective'} ha interrogado a ${result.targetName}`,
+        style: 'blue'
+      });
+    } else {
+      if (callback) callback(result);
+    }
+  });
+
+  // Médico: Quitar voto
+  socket.on('removeVote', ({ code, targetId }, callback) => {
+    const room = rooms.get(code);
+
+    if (!room) {
+      if (callback) callback({ success: false, error: 'Sala no encontrada' });
+      return;
+    }
+
+    const result = room.removeVote(socket.id, targetId);
+
+    if (result.success) {
+      // Enviar resultado al médico
+      if (callback) callback(result);
+
+      // Actualizar conteo de votos para todos
+      const voteCounts = room.countVotes();
+      const voteCountsObj = Object.fromEntries(voteCounts);
+      io.to(code).emit('voteCountsUpdated', voteCountsObj);
+
+      // Notificar a todos que el médico usó su habilidad
+      const medic = room.getAllPlayers().find(p => p.id === socket.id);
+      io.to(code).emit('roleNotification', {
+        type: 'medic',
+        message: `💊 ${medic?.name || 'Médico'} ha quitado 1 voto de ${result.targetName}`,
+        style: 'green'
+      });
+    } else {
+      if (callback) callback(result);
+    }
+  });
+
+  // Escritor: Usar habilidad de cambiar palabra
+  socket.on('useWriterAbility', ({ code, targetId, fakeWord }, callback) => {
+    const room = rooms.get(code);
+
+    if (!room) {
+      if (callback) callback({ success: false, error: 'Sala no encontrada' });
+      return;
+    }
+
+    const result = room.useWriterAbility(socket.id, targetId, fakeWord);
+
+    if (result.success) {
+      if (callback) callback(result);
+
+      if (result.swapped) {
+        // Notificar al objetivo que su palabra fue cambiada
+        io.to(result.targetId).emit('wordSwapped', {
+          newWord: fakeWord,
+          message: '¡Alguien ha cambiado tu palabra!',
+          hint: 'Puede que alguien esté intentando confundirte... 🤔'
+        });
+
+        // Notificar a todos que un escritor usó su habilidad
+        io.to(code).emit('roleNotification', {
+          type: 'writer',
+          message: '✍️ Un impostor ha cambiado la palabra de alguien ¡CUIDADO!',
+          style: 'red'
+        });
+      }
+    } else {
+      if (callback) callback(result);
     }
   });
 
@@ -720,6 +1065,34 @@ async function processBotTurn(room, code) {
 
   if (!currentBot || !currentBot.isBot) return;
 
+  // Si es el primer turno de la ronda y el bot es escritor, usar habilidad
+  if (room.currentPlayerIndex === 0 && currentBot.specialRole === 'writer') {
+    const abilities = room.roleAbilities.get(currentBot.id);
+    if (abilities && !abilities.usedThisRound) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const writerAction = currentBot.ai.shouldUseWriterAbility(room.getAllPlayers());
+      if (writerAction) {
+        const result = room.useWriterAbility(currentBot.id, writerAction.targetId, writerAction.fakeWord);
+        if (result.success && result.swapped) {
+          // Notificar al objetivo
+          io.to(result.targetId).emit('wordSwapped', {
+            newWord: writerAction.fakeWord,
+            message: '¡Alguien ha cambiado tu palabra!',
+            hint: 'Puede que alguien esté intentando confundirte... 🤔'
+          });
+
+          // Notificar a todos
+          io.to(code).emit('roleNotification', {
+            type: 'writer',
+            message: `✍️ Un impostor ha cambiado la palabra de alguien ¡CUIDADO!`,
+            style: 'red'
+          });
+        }
+      }
+    }
+  }
+
   // Notificar que el bot está pensando
   io.to(code).emit('botThinking', {
     botId: currentBot.id,
@@ -739,6 +1112,27 @@ async function processBotTurn(room, code) {
       playerName: currentBot.name,
       word: botWord
     });
+
+    // Si el bot es detective, considerar interrogar
+    if (currentBot.specialRole === 'detective') {
+      const abilities = room.roleAbilities.get(currentBot.id);
+      if (abilities) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const targetId = currentBot.ai.shouldInterrogate(room.getAllPlayers(), abilities.interrogated);
+        if (targetId) {
+          const result = room.interrogatePlayer(currentBot.id, targetId);
+          if (result.success) {
+            // Notificar a todos que el detective interrogó
+            io.to(code).emit('roleNotification', {
+              type: 'detective',
+              message: `🔍 ${currentBot.name} ha interrogado a ${result.targetName}`,
+              style: 'blue'
+            });
+          }
+        }
+      }
+    }
 
     // Esperar tiempo configurado antes de continuar
     const wordDelay = (room.config.wordDelay || 15) * 1000;
@@ -787,6 +1181,37 @@ async function processBotVotes(room, code) {
     const alivePlayers = room.getAlivePlayers();
     const votedCount = room.votes.size;
     io.to(code).emit('voteProgress', { voted: votedCount, total: alivePlayers.length });
+
+    // Enviar conteo de votos actualizado
+    const voteCounts = room.countVotes();
+    const voteCountsObj = Object.fromEntries(voteCounts);
+    io.to(code).emit('voteCountsUpdated', voteCountsObj);
+
+    // Si el bot es médico, considerar usar su habilidad
+    if (bot.specialRole === 'medic') {
+      const abilities = room.roleAbilities.get(bot.id);
+      if (abilities && !abilities.abilityUsed) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const targetId = bot.ai.shouldUseMedicAbility(voteCounts, alivePlayers);
+        if (targetId) {
+          const result = room.removeVote(bot.id, targetId);
+          if (result.success) {
+            // Notificar que el médico bot usó su habilidad
+            io.to(code).emit('roleNotification', {
+              type: 'medic',
+              message: `💊 ${bot.name} ha quitado 1 voto de ${result.targetName}`,
+              style: 'green'
+            });
+
+            // Actualizar conteos de votos
+            const updatedCounts = room.countVotes();
+            const updatedCountsObj = Object.fromEntries(updatedCounts);
+            io.to(code).emit('voteCountsUpdated', updatedCountsObj);
+          }
+        }
+      }
+    }
   }
 
   // Si todos ya votaron (incluyendo humanos), procesar resultados
