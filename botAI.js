@@ -299,7 +299,25 @@ class BotAI {
       'Nieve': ['Blanco', 'Frío', 'Copos', 'Invierno', 'Esquí', 'Hielo']
     };
 
-    const possibleWords = relatedWords[this.word] || ['Relacionado', 'Similar', 'Parecido'];
+    let possibleWords = relatedWords[this.word];
+
+    // Si no hay palabras específicas, intentar generar basándose en la palabra
+    if (!possibleWords) {
+      // Generar palabras genéricas pero mejores que "Similar"
+      const wordLower = this.word.toLowerCase();
+
+      // Intentar categorizar la palabra
+      if (wordLower.includes('animal') || wordLower.includes('mascota')) {
+        possibleWords = ['Criatura', 'Peludo', 'Compañero', 'Amigo', 'Leal'];
+      } else if (wordLower.includes('comida') || wordLower.includes('plato')) {
+        possibleWords = ['Sabroso', 'Delicioso', 'Nutritivo', 'Cocinar', 'Comer'];
+      } else if (wordLower.includes('lugar') || wordLower.includes('ciudad')) {
+        possibleWords = ['Destino', 'Visitar', 'Ubicación', 'Espacioso', 'Tranquilo'];
+      } else {
+        // Palabras descriptivas genéricas pero variadas
+        possibleWords = ['Útil', 'Común', 'Grande', 'Pequeño', 'Bonito', 'Especial', 'Único', 'Normal'];
+      }
+    }
 
     // Evitar palabras ya usadas
     const usedWords = allWords.map(w => w.word.toLowerCase());
@@ -309,8 +327,10 @@ class BotAI {
       return availableWords[Math.floor(Math.random() * availableWords.length)];
     }
 
-    // Si todas están usadas, generar una variante
-    return possibleWords[Math.floor(Math.random() * possibleWords.length)];
+    // Si todas están usadas, agregar variantes con números
+    const baseWord = possibleWords[Math.floor(Math.random() * possibleWords.length)];
+    const variants = [baseWord, `Muy ${baseWord}`, `Super ${baseWord}`];
+    return variants[Math.floor(Math.random() * variants.length)];
   }
 
   generateImpostorWord(allWords) {
