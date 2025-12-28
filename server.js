@@ -1310,7 +1310,7 @@ function processVoteResults(room, code) {
         }
       }
     }, voteDelay);
-  }
+  } 
 }
 
 // Endpoint raíz
